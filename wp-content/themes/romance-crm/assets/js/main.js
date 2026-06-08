@@ -221,18 +221,28 @@ $(function () {
           if (isDC) {
             // Sync HTML attr for CSS [data-favorite="1"] selector
             $this.attr("data-favorite", favorite);
-            // Optimistic class update for instant visual feedback
             if (favorite == "1") {
               $dcRow.addClass("is-favorite");
             } else {
               $dcRow.removeClass("is-favorite");
             }
-            // Server refresh for correct row order.
-            // Using DOM prepend on $dcRow is unreliable: fetchContactList()
-            // polls every 15 s and replaces the list HTML, detaching $dcRow
-            // so any prepend on a stale reference creates duplicates.
-            // A single get_contact_list call after the meta update always
-            // returns favorites-first and resolves any in-flight poll race.
+
+            // Instant DOM re-sort: detach the row and reinsert it at the
+            // correct position immediately (no AJAX latency).
+            // The 15 s fetchContactList poll can arrive after our server
+            // refresh and silently overwrite the sorted list with stale
+            // data — this client-side move makes the visual update instant
+            // regardless of race timing.
+            var $list = $(".contact-list .response");
+            $dcRow.detach();
+            var $lastFav = $list.find(".dc-contact.is-favorite").last();
+            if ($lastFav.length) {
+              $dcRow.insertAfter($lastFav);
+            } else {
+              $list.prepend($dcRow);
+            }
+
+            // Server refresh for ordering consistency on the next render.
             $.ajax({
               url: ajaxurl,
               type: "POST",
