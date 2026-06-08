@@ -384,6 +384,32 @@ function dc_handle_get_contact_list( $id ) {
 }
 
 // ─────────────────────────────────────────────
+// Timestamp helper — Dating.com returns ms, PHP date() expects seconds
+// ─────────────────────────────────────────────
+
+/**
+ * Normalise a Dating.com message timestamp to a valid Unix second.
+ * The API returns JavaScript milliseconds (13-digit numbers).
+ * Returns 0 for missing, zero, or out-of-range values so callers
+ * can show a safe fallback instead of a nonsensical year.
+ */
+function dc_safe_timestamp( $raw ) {
+	$ts = (int) $raw;
+	if ( $ts <= 0 ) {
+		return 0;
+	}
+	// 13-digit value → milliseconds → convert to seconds
+	if ( $ts > 9_999_999_999 ) {
+		$ts = (int) ( $ts / 1000 );
+	}
+	// Sanity: must be between 2000-01-01 and 2100-01-01
+	if ( $ts < 946684800 || $ts > 4102444800 ) {
+		return 0;
+	}
+	return $ts;
+}
+
+// ─────────────────────────────────────────────
 // AJAX handler — Open chat (reads local storage)
 // ─────────────────────────────────────────────
 
@@ -414,9 +440,8 @@ function dc_handle_open_chat( $id, $contact_id ) {
 			$align       = $is_outbound ? 'text-end text-success' : 'text-start text-primary';
 			$sender      = $is_outbound ? 'Модель' : 'Клиент';
 			$text        = isset( $msg['text'] ) ? esc_html( $msg['text'] ) : '';
-			$date        = ! empty( $msg['timestamp'] )
-			             ? esc_html( date( 'd.m.Y H:i', (int) $msg['timestamp'] ) )
-			             : esc_html( (string) ( $msg['timestamp'] ?? '' ) );
+			$ts          = dc_safe_timestamp( $msg['timestamp'] ?? 0 );
+			$date        = $ts > 0 ? esc_html( date( 'd.m.Y H:i', $ts ) ) : '—';
 
 			$html .= '<div class="chat-message ' . $align . ' mb-3">'
 			       . '<p>' . $sender . ' ( <small>' . $date . '</small> )</p>'
@@ -450,9 +475,8 @@ function dc_handle_check_message( $id, $contact_id ) {
 			$align       = $is_outbound ? 'text-end text-success' : 'text-start text-primary';
 			$sender      = $is_outbound ? 'Модель' : 'Клиент';
 			$text        = isset( $msg['text'] ) ? esc_html( $msg['text'] ) : '';
-			$date        = ! empty( $msg['timestamp'] )
-			             ? esc_html( date( 'd.m.Y H:i', (int) $msg['timestamp'] ) )
-			             : esc_html( (string) ( $msg['timestamp'] ?? '' ) );
+			$ts          = dc_safe_timestamp( $msg['timestamp'] ?? 0 );
+			$date        = $ts > 0 ? esc_html( date( 'd.m.Y H:i', $ts ) ) : '—';
 
 			$html .= '<div class="chat-message ' . $align . ' mb-3">'
 			       . '<p>' . $sender . ' ( <small>' . $date . '</small> )</p>'
