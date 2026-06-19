@@ -1,0 +1,16 @@
+{
+  "name": "dc-connector",
+  "version": "1.0.0",
+  "description": "Background Dating.com connector for WordPress CRM",
+  "main": "dc-connector.js",
+  "scripts": {
+    "start": "node dc-connector.js",
+    "test": "node dc-connector.js --test"
+  },
+  "dependencies": {
+    "playwright": "^1.44.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

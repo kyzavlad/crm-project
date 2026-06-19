@@ -1,0 +1,4 @@
+config.js
+.session/
+node_modules/
+*.log
