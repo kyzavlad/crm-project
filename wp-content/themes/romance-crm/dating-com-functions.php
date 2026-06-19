@@ -282,8 +282,54 @@ function dc_handle_import_messages_ajax() {
 }
 
 // ─────────────────────────────────────────────
-// Favorites toggle (local post meta, no RC API call)
+// AJAX — Background connector status
 // ─────────────────────────────────────────────
+// Called by the Node.js connector (sync_action=update) to report heartbeat,
+// and by the CRM sync panel JS (sync_action=get) to display status.
+// Authenticated by the per-model import token — no WP session required.
+
+add_action( 'wp_ajax_dc_bg_sync_status',        'dc_handle_bg_sync_status' );
+add_action( 'wp_ajax_nopriv_dc_bg_sync_status', 'dc_handle_bg_sync_status' );
+
+function dc_handle_bg_sync_status() {
+	$model_id = intval( $_POST['model_id'] ?? 0 );
+	$token    = sanitize_text_field( $_POST['token'] ?? '' );
+
+	if ( ! $model_id || ! dc_verify_import_token( $model_id, $token ) ) {
+		wp_send_json_error( 'Недействительный токен.' );
+	}
+
+	$sync_action = sanitize_text_field( $_POST['sync_action'] ?? 'get' );
+
+	if ( $sync_action === 'update' ) {
+		$allowed_statuses = [ 'ok', 'warning', 'error' ];
+		$status   = sanitize_text_field( $_POST['status'] ?? 'ok' );
+		$status   = in_array( $status, $allowed_statuses, true ) ? $status : 'ok';
+		$err_msg  = sanitize_text_field( mb_substr( (string) ( $_POST['error'] ?? '' ), 0, 300 ) );
+		$imported = intval( $_POST['imported'] ?? 0 );
+
+		update_post_meta( $model_id, '_dc_bg_sync_last_time',   time() );
+		update_post_meta( $model_id, '_dc_bg_sync_last_status', $status );
+		update_post_meta( $model_id, '_dc_bg_sync_last_error',  $err_msg );
+		update_post_meta( $model_id, '_dc_bg_sync_imported',    $imported );
+
+		wp_send_json_success( 'ok' );
+		return;
+	}
+
+	// Default: return current status for the CRM panel
+	$last_time   = get_post_meta( $model_id, '_dc_bg_sync_last_time',   true );
+	$last_status = get_post_meta( $model_id, '_dc_bg_sync_last_status', true );
+	$last_error  = get_post_meta( $model_id, '_dc_bg_sync_last_error',  true );
+	$imported    = get_post_meta( $model_id, '_dc_bg_sync_imported',    true );
+
+	wp_send_json_success( [
+		'last_time'   => $last_time   ? esc_html( date( 'd.m.Y H:i', (int) $last_time ) ) : null,
+		'last_status' => esc_html( $last_status ?: 'unknown' ),
+		'last_error'  => esc_html( (string) ( $last_error ?: '' ) ),
+		'imported'    => (int) ( $imported ?: 0 ),
+	] );
+}
 
 /**
  * Called from handle_toggle_favorite() in functions.php when source_model === 'dating_com'.
@@ -566,6 +612,21 @@ function dc_render_sync_panel( $id ) {
 		<p class="text-muted mt-2 mb-0" style="font-size:11px;">
 			Живые обновления работают, пока DC Sync активен во вкладке Dating.com.
 		</p>
+
+		<!-- Connector config for easy copying into config.js -->
+		<details class="mt-3">
+			<summary style="font-size:12px;cursor:pointer;color:#888;">&#9881; Конфиг для фонового коннектора (config.js)</summary>
+			<pre id="dc-connector-cfg" class="mt-2 p-2 rounded" style="font-size:11px;background:#f8f9fa;border:1px solid #dee2e6;user-select:all;white-space:pre-wrap;">Загрузка…</pre>
+		</details>
+
+		<!-- Background connector status -->
+		<div class="mt-3 p-2 rounded" style="background:#f8f9fa;border:1px solid #dee2e6;">
+			<div class="d-flex justify-content-between align-items-center">
+				<strong style="font-size:12px;">Фоновый коннектор</strong>
+				<span id="dc-bg-badge" class="badge bg-secondary" style="font-size:10px;">Загрузка…</span>
+			</div>
+			<div id="dc-bg-details" class="text-muted mt-1" style="font-size:11px;">—</div>
+		</div>
 	</div>
 
 	<script>
@@ -724,6 +785,50 @@ function dc_render_sync_panel( $id ) {
 					elStatus.textContent = 'Ошибка при обновлении контактов.';
 				});
 		});
+
+		// Connector config snippet for easy copying
+		var elCfg = document.getElementById('dc-connector-cfg');
+		if (elCfg) {
+			elCfg.textContent = 'crmUrl:      "' + window.location.origin + '"\n'
+				+ 'modelId:     ' + cfg.model_id + '\n'
+				+ 'importToken: "' + cfg.token + '"';
+		}
+
+		// Background connector status polling
+		function fetchBgStatus() {
+			var fd = new FormData();
+			fd.append('action',      'dc_bg_sync_status');
+			fd.append('sync_action', 'get');
+			fd.append('model_id',    cfg.model_id);
+			fd.append('token',       cfg.token);
+			fetch(cfg.ajax_url, {method: 'POST', body: fd})
+				.then(function(r){ return r.json(); })
+				.then(function(r){
+					if (!r.success) return;
+					var d       = r.data;
+					var badge   = document.getElementById('dc-bg-badge');
+					var details = document.getElementById('dc-bg-details');
+					if (!badge || !details) return;
+					if (!d.last_time) {
+						badge.className   = 'badge bg-secondary';
+						badge.textContent = 'Не запущен';
+						details.textContent = 'Запустите: node connector/dc-connector.js';
+						return;
+					}
+					badge.className = d.last_status === 'error'   ? 'badge bg-danger' :
+					                  d.last_status === 'warning' ? 'badge bg-warning text-dark' :
+					                                                'badge bg-success';
+					badge.textContent = d.last_status === 'error'   ? 'Ошибка' :
+					                    d.last_status === 'warning' ? 'Предупреждение' : 'Активен';
+					var info = 'Последняя синхронизация: ' + d.last_time;
+					if (d.imported > 0) info += ' · Импортировано: ' + d.imported;
+					if (d.last_error)   info += ' · Ошибка: '        + d.last_error;
+					details.textContent = info;
+				})
+				.catch(function(){});
+		}
+		fetchBgStatus();
+		setInterval(fetchBgStatus, 60000);
 	});
 	</script>
 	<?php
