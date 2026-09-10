@@ -299,7 +299,19 @@ async function login(page) {
     await page.waitForTimeout(1_000);
 
     log('Opening top login form...');
-    const clickedLogin = await clickVisibleExactText(page, ['Log in', 'Login', 'Sign in']).catch(() => false);
+    // DC_LOGIN_SWITCHER_V6: use the real Sign in control, not a nested text node.
+    const clickedLogin = await page.evaluate(() => {
+      const controls = Array.from(document.querySelectorAll('button, a'));
+      const control = controls.find((el) => {
+        const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+        const cls = String(el.className || '').toLowerCase();
+        return text === 'sign in' || text === 'log in' || cls.includes('sign-in');
+      });
+      if (!control) return false;
+      control.scrollIntoView({ block: 'center', inline: 'center' });
+      control.click();
+      return true;
+    }).catch(() => false);
 
     if (!clickedLogin) {
       warn('Could not find top login button.');
