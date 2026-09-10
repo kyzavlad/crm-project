@@ -252,15 +252,27 @@ async function clickVisibleExactText(page, labels) {
 }
 
 async function submitPasswordForm(page) {
-  return await page.locator('input[type="password"]').first().evaluate((el) => {
+  return await page.locator('input[type="password"]:visible').first().evaluate((el) => {
+    // DC_LOGIN_SUBMIT_V6: Dating.com renders several button-like controls.
+    // Prefer the visible final Continue/Sign in control from the password form.
     const form = el.closest('form');
-    const btn =
-      (form && form.querySelector('button[type="submit"], input[type="submit"], button')) ||
-      Array.from(document.querySelectorAll('button[type="submit"], input[type="submit"], button'))
-        .filter(b => {
-          const r = b.getBoundingClientRect();
-          return r.width > 5 && r.height > 5 && r.y >= 0 && r.y < 1200;
-        })[0];
+    const root = form || document;
+    const buttons = Array.from(root.querySelectorAll('button, input[type="submit"]'))
+      .filter((button) => {
+        const r = button.getBoundingClientRect();
+        return r.width > 5 && r.height > 5 && r.y >= 0 && r.y < 1200;
+      });
+
+    const preferred = buttons.filter((button) => {
+      const text = (button.innerText || button.value || button.textContent || '')
+        .trim()
+        .toLowerCase();
+      return text === 'continue' || text === 'sign in' || text === 'log in';
+    });
+
+    const btn = preferred[preferred.length - 1] ||
+      buttons.find(button => String(button.type).toLowerCase() === 'submit') ||
+      buttons[buttons.length - 1];
 
     if (!btn) return false;
 
