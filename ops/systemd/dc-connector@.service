@@ -1,0 +1,20 @@
+[Unit]
+Description=Dating.com background connector - %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/www/fastuser/data/www/crmrc.app/connector-%i
+ExecStart=/usr/bin/node /var/www/fastuser/data/www/crmrc.app/connector-%i/dc-connector.js
+Environment=NODE_ENV=production
+Restart=always
+RestartSec=15
+RuntimeMaxSec=6h
+MemoryMax=2G
+KillMode=control-group
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
