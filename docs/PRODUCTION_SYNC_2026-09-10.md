@@ -45,3 +45,15 @@ Bounded source capture verified the live connector implementations and syntax:
 Igor is the newest superset: it contains `DC_DIALOG_HISTORY_MERGE_V42`, `DC_CHAT_CONFIRM_POLL_V42`, and `DC_CHANNEL_CLASSIFIER_V5`. Anton already had V5 but not V4.2; Stanislava was older. No hard-coded model identifiers were found in Igor source; profile-specific values remain in ignored `config.js`.
 
 A production outbox attempt exposed a V5 regression: the browser-context `page.evaluate()` callback called the Node-side `log()` function and failed with `ReferenceError: log is not defined`. The canonical branch source removes that invalid cross-context logger call while preserving classifier behavior.
+
+## Final production outcome
+
+The latest profile was identified in CRM as model post `366` (Valentyn). During the first smoke test, CRM contained an incorrect Dating operator ID. Live Dating.com login confirmed the profile ID as `116328162931`; CRM `id_model` and the generated connector config were corrected before production service activation.
+
+Fresh-login handling was hardened in the canonical connector (`DC_LOGIN_INBOX_ENTRY_V9`, exact password-mode switch, and form-scoped submit). A clean session test then completed successfully and imported real dialogs with zero connector errors.
+
+`dc-connector-valentin.service` is enabled and active. Multiple production cycles completed with `Errors: 0`; CRM background status is `ok`, error is empty, and 38 contacts were present at final verification. There were no pending/processing outbox rows for model 366.
+
+Igor was upgraded to the same canonical runtime after a bounded diff showed only the fresh-login changes relative to his already-fixed V4.2/V5 implementation. Post-restart Igor completed a production cycle with zero errors. Anton remained untouched and continued zero-error cycles. Stanislava remains intentionally inactive.
+
+Canonical runtime SHA-256 at final verification: `6c434d250fe95e92e06d6d4fbff81ad9d6d42e355ea0f875507cfb243fb1be2d`; it matched `connector-runtime`, Igor, and Valentyn. Temporary login diagnostics, temporary configs, failed session copies, and credential-bearing backup config were removed from Valentyn's production connector directory.
