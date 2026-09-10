@@ -252,34 +252,33 @@ async function clickVisibleExactText(page, labels) {
 }
 
 async function submitPasswordForm(page) {
-  return await page.locator('input[type="password"]:visible').first().evaluate((el) => {
-    // DC_LOGIN_SUBMIT_V6: Dating.com renders several button-like controls.
-    // Prefer the visible final Continue/Sign in control from the password form.
-    const form = el.closest('form');
-    const root = form || document;
-    const buttons = Array.from(root.querySelectorAll('button, input[type="submit"]'))
-      .filter((button) => {
-        const r = button.getBoundingClientRect();
-        return r.width > 5 && r.height > 5 && r.y >= 0 && r.y < 1200;
-      });
+  // DC_LOGIN_SUBMIT_V7: mirror the proven Dating.com UI flow.
+  // The final Continue/Sign in control may sit outside the password input form,
+  // so select the last visible matching button across the page.
+  const preferred = page
+    .locator('button:visible')
+    .filter({ hasText: /^(continue|sign in|log in)$/i });
 
-    const preferred = buttons.filter((button) => {
-      const text = (button.innerText || button.value || button.textContent || '')
-        .trim()
-        .toLowerCase();
-      return text === 'continue' || text === 'sign in' || text === 'log in';
-    });
-
-    const btn = preferred[preferred.length - 1] ||
-      buttons.find(button => String(button.type).toLowerCase() === 'submit') ||
-      buttons[buttons.length - 1];
-
-    if (!btn) return false;
-
-    btn.scrollIntoView({ block: 'center', inline: 'center' });
-    btn.click();
+  const preferredCount = await preferred.count();
+  if (preferredCount > 0) {
+    await preferred.last().click({ timeout: 10_000 });
     return true;
-  });
+  }
+
+  const submit = page.locator('button[type="submit"]:visible, input[type="submit"]:visible');
+  const submitCount = await submit.count();
+  if (submitCount > 0) {
+    await submit.last().click({ timeout: 10_000 });
+    return true;
+  }
+
+  const password = page.locator('input[type="password"]:visible').first();
+  if (await password.count()) {
+    await password.press('Enter');
+    return true;
+  }
+
+  return false;
 }
 
 async function login(page) {
