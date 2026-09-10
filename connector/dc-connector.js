@@ -252,33 +252,21 @@ async function clickVisibleExactText(page, labels) {
 }
 
 async function submitPasswordForm(page) {
-  // DC_LOGIN_SUBMIT_V7: mirror the proven Dating.com UI flow.
-  // The final Continue/Sign in control may sit outside the password input form,
-  // so select the last visible matching button across the page.
-  const preferred = page
-    .locator('button:visible')
-    .filter({ hasText: /^(continue|sign in|log in)$/i });
-
-  const preferredCount = await preferred.count();
-  if (preferredCount > 0) {
-    await preferred.last().click({ timeout: 10_000 });
-    return true;
-  }
-
-  const submit = page.locator('button[type="submit"]:visible, input[type="submit"]:visible');
-  const submitCount = await submit.count();
-  if (submitCount > 0) {
-    await submit.last().click({ timeout: 10_000 });
-    return true;
-  }
-
+  // DC_LOGIN_SUBMIT_V8: click the submit control inside the actual password form.
   const password = page.locator('input[type="password"]:visible').first();
-  if (await password.count()) {
-    await password.press('Enter');
-    return true;
+  if (!(await password.count())) return false;
+
+  const form = password.locator('xpath=ancestor::form[1]');
+  if (await form.count()) {
+    const submit = form.locator('button[type="submit"]:visible, input[type="submit"]:visible');
+    if (await submit.count()) {
+      await submit.last().click({ timeout: 10_000 });
+      return true;
+    }
   }
 
-  return false;
+  await password.press('Enter');
+  return true;
 }
 
 async function login(page) {
@@ -331,7 +319,13 @@ async function login(page) {
     await page.waitForTimeout(3_000);
 
     log('Switching to password login if needed...');
-    await clickVisibleExactText(page, ['Continue with password']).catch(() => {});
+    // DC_LOGIN_PASSWORD_SWITCH_V8: use the exact interactive text proven in live UI.
+    const passwordSwitch = page.getByText('Continue with password', { exact: true });
+    if (await passwordSwitch.count()) {
+      await passwordSwitch.first().click({ timeout: 10_000 });
+    } else {
+      await clickVisibleExactText(page, ['Continue with password']);
+    }
     await page.waitForTimeout(3_000);
 
     const emailSel = 'input[type="email"]:visible, input[name="email"]:visible, input[name="login"]:visible, [data-qa="email-input"]:visible';
