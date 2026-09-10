@@ -285,14 +285,11 @@ async function login(page) {
       return true;
     }
 
-    log('Session expired or not found — attempting login from main domain...');
-
-    await page.goto('https://dating.com/', {
-      waitUntil: 'domcontentloaded',
-      timeout: 60_000
-    });
-
-    await page.waitForTimeout(4_000);
+    // DC_LOGIN_INBOX_ENTRY_V9: the live site exposes the working Sign in/password
+    // flow from the inbox welcome screen. Navigating back to the root page can
+    // expose a different registration overlay and the wrong off-screen form.
+    log('Session expired or not found — opening login from inbox welcome screen...');
+    await page.waitForTimeout(1_000);
 
     await clickVisibleExactText(page, ['Accept all', 'Accept All']).catch(() => {});
     await page.waitForTimeout(1_000);
