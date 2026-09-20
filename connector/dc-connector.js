@@ -252,21 +252,22 @@ async function clickVisibleExactText(page, labels) {
 }
 
 async function submitPasswordForm(page) {
-  // DC_LOGIN_SUBMIT_V8: click the submit control inside the actual password form.
-  const password = page.locator('input[type="password"]:visible').first();
-  if (!(await password.count())) return false;
+  return await page.locator('input[type="password"]').first().evaluate((el) => {
+    const form = el.closest('form');
+    const btn =
+      (form && form.querySelector('button[type="submit"], input[type="submit"], button')) ||
+      Array.from(document.querySelectorAll('button[type="submit"], input[type="submit"], button'))
+        .filter(b => {
+          const r = b.getBoundingClientRect();
+          return r.width > 5 && r.height > 5 && r.y >= 0 && r.y < 1200;
+        })[0];
 
-  const form = password.locator('xpath=ancestor::form[1]');
-  if (await form.count()) {
-    const submit = form.locator('button[type="submit"]:visible, input[type="submit"]:visible');
-    if (await submit.count()) {
-      await submit.last().click({ timeout: 10_000 });
-      return true;
-    }
-  }
+    if (!btn) return false;
 
-  await password.press('Enter');
-  return true;
+    btn.scrollIntoView({ block: 'center', inline: 'center' });
+    btn.click();
+    return true;
+  });
 }
 
 async function login(page) {
@@ -285,29 +286,20 @@ async function login(page) {
       return true;
     }
 
-    // DC_LOGIN_INBOX_ENTRY_V9: the live site exposes the working Sign in/password
-    // flow from the inbox welcome screen. Navigating back to the root page can
-    // expose a different registration overlay and the wrong off-screen form.
-    log('Session expired or not found — opening login from inbox welcome screen...');
-    await page.waitForTimeout(1_000);
+    log('Session expired or not found — attempting login from main domain...');
+
+    await page.goto('https://dating.com/', {
+      waitUntil: 'domcontentloaded',
+      timeout: 60_000
+    });
+
+    await page.waitForTimeout(4_000);
 
     await clickVisibleExactText(page, ['Accept all', 'Accept All']).catch(() => {});
     await page.waitForTimeout(1_000);
 
     log('Opening top login form...');
-    // DC_LOGIN_SWITCHER_V6: use the real Sign in control, not a nested text node.
-    const clickedLogin = await page.evaluate(() => {
-      const controls = Array.from(document.querySelectorAll('button, a'));
-      const control = controls.find((el) => {
-        const text = (el.innerText || el.textContent || '').trim().toLowerCase();
-        const cls = String(el.className || '').toLowerCase();
-        return text === 'sign in' || text === 'log in' || cls.includes('sign-in');
-      });
-      if (!control) return false;
-      control.scrollIntoView({ block: 'center', inline: 'center' });
-      control.click();
-      return true;
-    }).catch(() => false);
+    const clickedLogin = await clickVisibleExactText(page, ['Log in', 'Login', 'Sign in']).catch(() => false);
 
     if (!clickedLogin) {
       warn('Could not find top login button.');
@@ -316,13 +308,7 @@ async function login(page) {
     await page.waitForTimeout(3_000);
 
     log('Switching to password login if needed...');
-    // DC_LOGIN_PASSWORD_SWITCH_V8: use the exact interactive text proven in live UI.
-    const passwordSwitch = page.getByText('Continue with password', { exact: true });
-    if (await passwordSwitch.count()) {
-      await passwordSwitch.first().click({ timeout: 10_000 });
-    } else {
-      await clickVisibleExactText(page, ['Continue with password']);
-    }
+    await clickVisibleExactText(page, ['Continue with password']).catch(() => {});
     await page.waitForTimeout(3_000);
 
     const emailSel = 'input[type="email"]:visible, input[name="email"]:visible, input[name="login"]:visible, [data-qa="email-input"]:visible';
@@ -1856,8 +1842,13 @@ async function main() {
   const page    = context.pages()[0] || await context.newPage();
   const reqCtx  = context.request;
 
+  // DC_OUTBOUND_FAST_WORKER_V1
+  let outboundWorkerRunning = false;
+  let outboundWorker = Promise.resolve();
+
   const shutdown = async () => {
     log('Shutting down...');
+    outboundWorkerRunning = false;
     await context.close().catch(() => {});
     process.exit(0);
   };
@@ -1871,10 +1862,47 @@ async function main() {
     process.exit(1);
   }
 
-  // Main loop
+  if (!TEST_MODE) {
+    const outboundPage = await context.newPage();
+    const outboundPollMs = Math.max(Number(config.outboundPollIntervalMs ?? 2000), 1000);
+    const outboundBurstMax = Math.max(1, Math.min(Number(config.outboundBurstMax ?? 5), 10));
+
+    outboundWorkerRunning = true;
+    log(`Outbound fast worker starting. poll=${outboundPollMs}ms burst=${outboundBurstMax}`);
+
+    outboundWorker = (async () => {
+      while (outboundWorkerRunning) {
+        let processed = 0;
+        let outboundErrors = 0;
+        try {
+          for (let i = 0; i < outboundBurstMax && outboundWorkerRunning; i++) {
+            const result = await processOutgoingQueue(outboundPage, reqCtx);
+            processed += result.processed || 0;
+            outboundErrors += result.errors || 0;
+            if (!result.processed && !result.errors) break;
+            if (result.errors) break;
+          }
+          if (processed > 0 || outboundErrors > 0) {
+            log(`Outbound fast worker: sent=${processed} errors=${outboundErrors}`);
+          }
+        } catch (e) {
+          warn('Outbound fast worker error:', e.message);
+        }
+        if (!outboundWorkerRunning) break;
+        await new Promise(resolve =>
+          setTimeout(resolve, processed > 0 ? 250 : outboundPollMs)
+        );
+      }
+    })();
+  }
+
+  // Main inbound sync loop
   while (true) {
     try {
-      const outbound = await processOutgoingQueue(page, reqCtx);
+      let outbound = { processed: 0, errors: 0 };
+      if (TEST_MODE) {
+        outbound = await processOutgoingQueue(page, reqCtx);
+      }
       const { imported, errors } = await runOneSyncCycle(page, reqCtx);
       if (outbound.processed > 0 || outbound.errors > 0) {
         log(`Outbound cycle: sent=${outbound.processed} errors=${outbound.errors}`);
@@ -1907,6 +1935,8 @@ async function main() {
     await new Promise(r => setTimeout(r, POLL_MS));
   }
 
+  outboundWorkerRunning = false;
+  await outboundWorker.catch(() => {});
   await context.close().catch(() => {});
 }
 
