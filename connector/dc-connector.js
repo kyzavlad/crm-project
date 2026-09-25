@@ -252,22 +252,21 @@ async function clickVisibleExactText(page, labels) {
 }
 
 async function submitPasswordForm(page) {
-  return await page.locator('input[type="password"]').first().evaluate((el) => {
-    const form = el.closest('form');
-    const btn =
-      (form && form.querySelector('button[type="submit"], input[type="submit"], button')) ||
-      Array.from(document.querySelectorAll('button[type="submit"], input[type="submit"], button'))
-        .filter(b => {
-          const r = b.getBoundingClientRect();
-          return r.width > 5 && r.height > 5 && r.y >= 0 && r.y < 1200;
-        })[0];
+  // DC_LOGIN_SUBMIT_V8: click the submit control inside the actual password form.
+  const password = page.locator('input[type="password"]:visible').first();
+  if (!(await password.count())) return false;
 
-    if (!btn) return false;
+  const form = password.locator('xpath=ancestor::form[1]');
+  if (await form.count()) {
+    const submit = form.locator('button[type="submit"]:visible, input[type="submit"]:visible');
+    if (await submit.count()) {
+      await submit.last().click({ timeout: 10_000 });
+      return true;
+    }
+  }
 
-    btn.scrollIntoView({ block: 'center', inline: 'center' });
-    btn.click();
-    return true;
-  });
+  await password.press('Enter');
+  return true;
 }
 
 async function login(page) {
@@ -286,20 +285,29 @@ async function login(page) {
       return true;
     }
 
-    log('Session expired or not found — attempting login from main domain...');
-
-    await page.goto('https://dating.com/', {
-      waitUntil: 'domcontentloaded',
-      timeout: 60_000
-    });
-
-    await page.waitForTimeout(4_000);
+    // DC_LOGIN_INBOX_ENTRY_V9: the live site exposes the working Sign in/password
+    // flow from the inbox welcome screen. Navigating back to the root page can
+    // expose a different registration overlay and the wrong off-screen form.
+    log('Session expired or not found — opening login from inbox welcome screen...');
+    await page.waitForTimeout(1_000);
 
     await clickVisibleExactText(page, ['Accept all', 'Accept All']).catch(() => {});
     await page.waitForTimeout(1_000);
 
     log('Opening top login form...');
-    const clickedLogin = await clickVisibleExactText(page, ['Log in', 'Login', 'Sign in']).catch(() => false);
+    // DC_LOGIN_SWITCHER_V6: use the real Sign in control, not a nested text node.
+    const clickedLogin = await page.evaluate(() => {
+      const controls = Array.from(document.querySelectorAll('button, a'));
+      const control = controls.find((el) => {
+        const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+        const cls = String(el.className || '').toLowerCase();
+        return text === 'sign in' || text === 'log in' || cls.includes('sign-in');
+      });
+      if (!control) return false;
+      control.scrollIntoView({ block: 'center', inline: 'center' });
+      control.click();
+      return true;
+    }).catch(() => false);
 
     if (!clickedLogin) {
       warn('Could not find top login button.');
@@ -308,7 +316,13 @@ async function login(page) {
     await page.waitForTimeout(3_000);
 
     log('Switching to password login if needed...');
-    await clickVisibleExactText(page, ['Continue with password']).catch(() => {});
+    // DC_LOGIN_PASSWORD_SWITCH_V8: use the exact interactive text proven in live UI.
+    const passwordSwitch = page.getByText('Continue with password', { exact: true });
+    if (await passwordSwitch.count()) {
+      await passwordSwitch.first().click({ timeout: 10_000 });
+    } else {
+      await clickVisibleExactText(page, ['Continue with password']);
+    }
     await page.waitForTimeout(3_000);
 
     const emailSel = 'input[type="email"]:visible, input[name="email"]:visible, input[name="login"]:visible, [data-qa="email-input"]:visible';
@@ -1843,12 +1857,22 @@ async function main() {
   const reqCtx  = context.request;
 
   // DC_OUTBOUND_FAST_WORKER_V1
+  // DC_RELIABILITY_RECYCLE_V2
   let outboundWorkerRunning = false;
   let outboundWorker = Promise.resolve();
+  let shuttingDown = false;
+  const recycleAfterMs = Math.max(
+    Number(config.recycleAfterMs ?? 30 * 60_000),
+    10 * 60_000
+  );
+  const processStartedAt = Date.now();
 
   const shutdown = async () => {
-    log('Shutting down...');
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log('Shutting down gracefully...');
     outboundWorkerRunning = false;
+    await outboundWorker.catch(() => {});
     await context.close().catch(() => {});
     process.exit(0);
   };
@@ -1860,6 +1884,18 @@ async function main() {
     await reportStatus(reqCtx, 'error', 'Login failed on startup', 0);
     await context.close();
     process.exit(1);
+  }
+
+  // Recover any queue row left in "processing" by a previous crashed/OOM-killed
+  // instance. systemd runs one connector instance per model, so recovery here
+  // cannot race an older live worker.
+  try {
+    const recovery = await crmOutboxPost(reqCtx, 'dc_outbox_recover');
+    if (Number(recovery?.recovered || 0) > 0) {
+      log(`Recovered stale outbound rows on startup: ${recovery.recovered}`);
+    }
+  } catch (e) {
+    warn('Startup outbox recovery failed:', e.message);
   }
 
   if (!TEST_MODE) {
@@ -1928,6 +1964,14 @@ async function main() {
 
     if (TEST_MODE) {
       log('TEST MODE — exiting after one cycle.');
+      break;
+    }
+
+    if (Date.now() - processStartedAt >= recycleAfterMs) {
+      log(
+        `Planned connector recycle after ${Math.round(recycleAfterMs / 60000)}m ` +
+        'to cap browser memory growth.'
+      );
       break;
     }
 
