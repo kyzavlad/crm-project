@@ -998,7 +998,8 @@ p {
     position: static;
     transform: translateY(0);
     width: 100%;
-  }
+
+[executed on device: vladkuzmenko-prod-01 (a98d5c98-0c1c-4835-8cbe-8f57c784dc88)]  }
 }
 
 .feature-section-2 .feature-image img {
@@ -1998,7 +1999,8 @@ p {
 }
 
 .mb-10 {
-  margin-bottom: 10px;
+
+[executed on device: vladkuzmenko-prod-01 (a98d5c98-0c1c-4835-8cbe-8f57c784dc88)]  margin-bottom: 10px;
 }
 
 .mb-15 {
@@ -2625,6 +2627,15 @@ p {
 .dc-contact-main { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 .dc-contact-left { min-width: 0; flex: 1; }
 .dc-contact-id { font-size: 13px; font-weight: 600; }
+.dc-contact-sender {
+  font-size: 11px;
+  font-weight: 600;
+  margin-top: 2px;
+  line-height: 1.2;
+}
+.dc-contact-sender.dc-last-client { color: #0d6efd; }
+.dc-contact-sender.dc-last-model { color: #198754; }
+.dc-contact-sender.dc-last-unknown { color: #999; }
 .dc-contact-preview {
   font-size: 12px;
   color: #888;
@@ -2657,3 +2668,12 @@ p {
   25%  { background-color: #fff9c4; }
   100% { background-color: transparent; }
 }
+
+.dc-history-sentinel {
+  font-size: 11px;
+  padding: 6px 8px 10px;
+  color: #888;
+  user-select: none;
+}
+
+[executed on device: vladkuzmenko-prod-01 (a98d5c98-0c1c-4835-8cbe-8f57c784dc88)]
