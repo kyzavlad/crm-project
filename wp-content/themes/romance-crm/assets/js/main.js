@@ -38,7 +38,7 @@ $(function () {
   var dcHistoryLoading = false;
 
   function dcGetScrollEl() {
-    return $("#chatModal .modal-body");
+    return $("#chatModalContent .chat-messages[data-source=\'dating_com\']");
   }
 
   function dcScrollToBottom() {
