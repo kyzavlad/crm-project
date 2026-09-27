@@ -198,6 +198,17 @@ function dc_handle_import_messages_ajax() {
 		if ( ! is_array( $msg ) ) {
 			continue;
 		}
+
+		$message_text = trim(
+			(string) ( $msg['text'] ?? '' )
+		);
+
+		// Не сохраняем пустые служебные события Dating.com
+		// как сообщения оператору.
+		if ( $message_text === '' ) {
+			continue;
+		}
+
 		$sanitized[] = [
 			'id'        => intval( $msg['id'] ?? 0 ),
 			'sender'    => sanitize_text_field( (string) ( $msg['sender'] ?? '' ) ),
@@ -232,9 +243,10 @@ function dc_handle_import_messages_ajax() {
 
 	// Update contact index
 	$contacts  = dc_get_stored_contacts( $model_id );
-	$last      = ! empty( $merged ) ? end( $merged ) : null;
-	$last_text = $last ? (string) ( $last['text'] ?? '' ) : '';
-	$last_ts   = $last ? (int) ( $last['timestamp'] ?? 0 ) : 0;
+	$last        = ! empty( $merged ) ? end( $merged ) : null;
+	$last_text   = $last ? (string) ( $last['text'] ?? '' ) : '';
+	$last_ts     = $last ? (int) ( $last['timestamp'] ?? 0 ) : 0;
+	$last_sender = $last ? (string) ( $last['sender'] ?? '' ) : '';
 
 	$unread = 0;
 	foreach ( $merged as $m ) {
@@ -249,6 +261,7 @@ function dc_handle_import_messages_ajax() {
 			$c['operator_id']    = $operator_id;
 			$c['last_message']   = mb_substr( $last_text, 0, 120 );
 			$c['last_timestamp'] = $last_ts;
+			$c['last_sender']    = $last_sender;
 			$c['unread_count']   = $unread;
 			$c['import_time']    = time();
 			$found = true;
@@ -263,6 +276,7 @@ function dc_handle_import_messages_ajax() {
 			'operator_id'    => $operator_id,
 			'last_message'   => mb_substr( $last_text, 0, 120 ),
 			'last_timestamp' => $last_ts,
+			'last_sender'    => $last_sender,
 			'unread_count'   => $unread,
 			'import_time'    => time(),
 		];
@@ -387,8 +401,21 @@ function dc_handle_get_contact_list( $id ) {
 		$last_time = ! empty( $c['last_timestamp'] )
 		           ? esc_html( date( 'd.m H:i', (int) $c['last_timestamp'] ) )
 		           : '';
-		$unread    = (int) ( $c['unread_count'] ?? 0 );
-		$is_fav    = isset( $fav_set[ (string) $c['contact_id'] ] );
+		$unread        = (int) ( $c['unread_count'] ?? 0 );
+		$is_fav        = isset( $fav_set[ (string) $c['contact_id'] ] );
+		$operator_id   = (string) ( $c['operator_id'] ?? '' );
+		$last_sender   = (string) ( $c['last_sender'] ?? '' );
+		$sender_label  = '—';
+		$sender_class  = 'dc-last-unknown';
+		if ( $last_sender !== '' ) {
+			if ( $operator_id !== '' && $last_sender === $operator_id ) {
+				$sender_label = 'Модель';
+				$sender_class = 'dc-last-model';
+			} else {
+				$sender_label = 'Клиент';
+				$sender_class = 'dc-last-client';
+			}
+		}
 
 		$row_class  = $is_fav ? 'dc-contact is-favorite' : 'dc-contact';
 		$star       = $is_fav ? '★' : '☆';
@@ -418,6 +445,7 @@ function dc_handle_get_contact_list( $id ) {
 		       .     '<div class="dc-contact-left">'
 		       .       '<span class="dc-contact-id">ID: ' . esc_html( $c['contact_id'] ) . '</span>'
 		       .       $unread_badge
+		       .       '<div class="dc-contact-sender ' . esc_attr( $sender_class ) . '">Последнее: ' . esc_html( $sender_label ) . '</div>'
 		       .       '<div class="dc-contact-preview">' . $last_text . '</div>'
 		       .     '</div>'
 		       .     '<div class="dc-contact-time">' . $last_time . '</div>'
@@ -456,7 +484,82 @@ function dc_safe_timestamp( $raw ) {
 }
 
 // ─────────────────────────────────────────────
-// AJAX handler — Open chat (reads local storage)
+// Dating.com chat pagination helpers
+// ─────────────────────────────────────────────
+
+if ( ! defined( 'DC_CHAT_PAGE_SIZE' ) ) {
+	define( 'DC_CHAT_PAGE_SIZE', 30 );
+}
+
+function dc_get_chat_page( $messages, $offset = 0, $limit = DC_CHAT_PAGE_SIZE ) {
+	$total  = is_array( $messages ) ? count( $messages ) : 0;
+	$offset = max( 0, (int) $offset );
+	$limit  = max( 10, min( 100, (int) $limit ) );
+
+	$end   = max( 0, $total - $offset );
+	$start = max( 0, $end - $limit );
+	$count = max( 0, $end - $start );
+	$slice = $count > 0 ? array_slice( $messages, $start, $count ) : [];
+
+	return [
+		'messages'    => $slice,
+		'total'       => $total,
+		'next_offset' => $offset + $count,
+		'has_more'    => $start > 0,
+	];
+}
+
+function dc_render_chat_message( $msg, $op_id ) {
+	$is_outbound = ( (string) ( $msg['sender'] ?? '' ) === (string) $op_id );
+	$align       = $is_outbound ? 'text-end text-success' : 'text-start text-primary';
+	$sender      = $is_outbound ? 'Модель' : 'Клиент';
+	$text        = isset( $msg['text'] ) ? esc_html( $msg['text'] ) : '';
+	$ts          = dc_safe_timestamp( $msg['timestamp'] ?? 0 );
+	$date        = $ts > 0 ? esc_html( date( 'd.m.Y H:i', $ts ) ) : '—';
+	$message_id  = (string) ( $msg['id'] ?? '' );
+
+	return '<div class="chat-message ' . $align . ' mb-3"'
+	     . ' data-message_id="' . esc_attr( $message_id ) . '"'
+	     . ' data-direction="' . ( $is_outbound ? 'outbound' : 'inbound' ) . '">'
+	     . '<p>' . $sender . ' ( <small>' . $date . '</small> )</p>'
+	     . '<p class="text-dark" style="font-size:14px;">' . $text . '</p>'
+	     . '</div>';
+}
+
+function dc_render_chat_page( $messages, $op_id, $offset = 0 ) {
+	$page = dc_get_chat_page( $messages, $offset );
+	$html = '';
+	foreach ( $page['messages'] as $msg ) {
+		$html .= dc_render_chat_message( $msg, $op_id );
+	}
+	$page['html'] = $html;
+	return $page;
+}
+
+function dc_render_chat_container( $messages, $op_id, $contact_id ) {
+	$page = dc_render_chat_page( $messages, $op_id, 0 );
+	$html = '<div class="chat-messages" data-chat_id="0"'
+	      . ' data-user_id="' . esc_attr( $contact_id ) . '"'
+	      . ' data-source="dating_com"'
+	      . ' data-history_offset="' . (int) $page['next_offset'] . '"'
+	      . ' data-history_total="' . (int) $page['total'] . '"'
+	      . ' data-has_more="' . ( $page['has_more'] ? '1' : '0' ) . '">';
+
+	if ( empty( $messages ) ) {
+		$html .= '<div class="text-center text-muted p-4"><p>Нет импортированных сообщений.</p></div>';
+	} else {
+		if ( $page['has_more'] ) {
+			$html .= '<div class="dc-history-sentinel text-center text-muted">Прокрутите вверх — старые сообщения подгрузятся автоматически</div>';
+		}
+		$html .= $page['html'];
+	}
+
+	$html .= '</div>';
+	return $html;
+}
+
+// ─────────────────────────────────────────────
+// AJAX handler — Open chat (latest page first)
 // ─────────────────────────────────────────────
 
 function dc_handle_open_chat( $id, $contact_id ) {
@@ -468,72 +571,52 @@ function dc_handle_open_chat( $id, $contact_id ) {
 	$html .= '<h5 class="mb-2"><strong>Dating.com</strong></h5>';
 	$html .= '<p class="m-0">&#x1F4AC; Контакт ID: ' . esc_html( $contact_id ) . '</p>';
 	$html .= '</div></div>';
-
 	$html .= '<div class="messages">';
-	$html .= '<div class="chat-messages" data-chat_id="0"'
-	       . ' data-user_id="' . esc_attr( $contact_id ) . '"'
-	       . ' data-source="dating_com">';
-
-	if ( empty( $messages ) ) {
-		$html .= '<div class="text-center text-muted p-4">'
-		       . '<p><strong>Нет импортированных сообщений</strong></p>'
-		       . '<p>Откройте этот чат на <a href="https://dating.com" target="_blank" rel="noopener">Dating.com</a>'
-		       . ' и запустите буклет синхронизации со страницы модели.</p>'
-		       . '</div>';
-	} else {
-		foreach ( $messages as $msg ) {
-			$is_outbound = ( (string) ( $msg['sender'] ?? '' ) === (string) $op_id );
-			$align       = $is_outbound ? 'text-end text-success' : 'text-start text-primary';
-			$sender      = $is_outbound ? 'Модель' : 'Клиент';
-			$text        = isset( $msg['text'] ) ? esc_html( $msg['text'] ) : '';
-			$ts          = dc_safe_timestamp( $msg['timestamp'] ?? 0 );
-			$date        = $ts > 0 ? esc_html( date( 'd.m.Y H:i', $ts ) ) : '—';
-
-			$html .= '<div class="chat-message ' . $align . ' mb-3">'
-			       . '<p>' . $sender . ' ( <small>' . $date . '</small> )</p>'
-			       . '<p class="text-dark" style="font-size:14px;">' . $text . '</p>'
-			       . '</div>';
-		}
-	}
-
-	$html .= '</div></div>';
+	$html .= dc_render_chat_container( $messages, $op_id, $contact_id );
+	$html .= '</div>';
 
 	wp_send_json_success( $html );
 }
 
 // ─────────────────────────────────────────────
-// AJAX handler — Check / poll messages (reads local storage)
+// AJAX handler — Load older Dating.com messages
+// ─────────────────────────────────────────────
+
+add_action( 'wp_ajax_dc_load_older_messages', 'dc_handle_load_older_messages' );
+
+function dc_handle_load_older_messages() {
+	$model_id   = intval( $_POST['id'] ?? 0 );
+	$contact_id = sanitize_text_field( $_POST['user_id'] ?? '' );
+	$offset     = max( 0, intval( $_POST['offset'] ?? 0 ) );
+
+	if ( ! $model_id || $contact_id === '' || ! ctype_digit( $contact_id ) ) {
+		wp_send_json_error( 'Некорректные параметры истории чата.' );
+	}
+	if ( get_field( 'source_model', $model_id ) !== 'dating_com' ) {
+		wp_send_json_error( 'История доступна только для Dating.com.' );
+	}
+
+	$messages = dc_get_stored_messages( $model_id, $contact_id );
+	$op_id    = get_field( 'id_model', $model_id );
+	$page     = dc_render_chat_page( $messages, $op_id, $offset );
+
+	wp_send_json_success( [
+		'html'        => $page['html'],
+		'next_offset' => (int) $page['next_offset'],
+		'total'       => (int) $page['total'],
+		'has_more'    => $page['has_more'] ? 1 : 0,
+	] );
+}
+
+// ─────────────────────────────────────────────
+// AJAX handler — Check / poll messages (latest page only)
 // ─────────────────────────────────────────────
 
 function dc_handle_check_message( $id, $contact_id ) {
 	$messages = dc_get_stored_messages( $id, $contact_id );
 	$op_id    = get_field( 'id_model', $id );
 
-	$html = '<div class="chat-messages" data-chat_id="0"'
-	      . ' data-user_id="' . esc_attr( $contact_id ) . '"'
-	      . ' data-source="dating_com">';
-
-	if ( empty( $messages ) ) {
-		$html .= '<div class="text-center text-muted p-4"><p>Нет импортированных сообщений.</p></div>';
-	} else {
-		foreach ( $messages as $msg ) {
-			$is_outbound = ( (string) ( $msg['sender'] ?? '' ) === (string) $op_id );
-			$align       = $is_outbound ? 'text-end text-success' : 'text-start text-primary';
-			$sender      = $is_outbound ? 'Модель' : 'Клиент';
-			$text        = isset( $msg['text'] ) ? esc_html( $msg['text'] ) : '';
-			$ts          = dc_safe_timestamp( $msg['timestamp'] ?? 0 );
-			$date        = $ts > 0 ? esc_html( date( 'd.m.Y H:i', $ts ) ) : '—';
-
-			$html .= '<div class="chat-message ' . $align . ' mb-3">'
-			       . '<p>' . $sender . ' ( <small>' . $date . '</small> )</p>'
-			       . '<p class="text-dark" style="font-size:14px;">' . $text . '</p>'
-			       . '</div>';
-		}
-	}
-
-	$html .= '</div>';
-
-	wp_send_json_success( $html );
+	wp_send_json_success( dc_render_chat_container( $messages, $op_id, $contact_id ) );
 }
 
 // ─────────────────────────────────────────────
@@ -878,3 +961,5 @@ function dc_register_source_model_field() {
 		'active'          => true,
 	] );
 }
+
+[executed on device: vladkuzmenko-prod-01 (a98d5c98-0c1c-4835-8cbe-8f57c784dc88)]
