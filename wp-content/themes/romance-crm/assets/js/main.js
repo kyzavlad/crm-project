@@ -33,18 +33,108 @@ $(function () {
     });
   }
 
-  // ── Dating.com chat polling (5 s, smart scroll, sound on new inbound) ────
+  // ── Dating.com chat: latest messages first + lazy older-history loading ──
   var dcChatInterval = null;
+  var dcHistoryLoading = false;
+
+  function dcGetScrollEl() {
+    return $("#chatModal .modal-body");
+  }
+
+  function dcScrollToBottom() {
+    var $scrollEl = dcGetScrollEl();
+    if ($scrollEl.length) {
+      $scrollEl.scrollTop($scrollEl[0].scrollHeight);
+    }
+  }
+
+  function loadDCOlderMessages() {
+    var $chatMsgs = $("#chatModalContent .chat-messages[data-source='dating_com']");
+    if (!$chatMsgs.length || dcHistoryLoading) return;
+    if (String($chatMsgs.attr("data-has_more")) !== "1") return;
+
+    var offset = parseInt($chatMsgs.attr("data-history_offset"), 10) || 0;
+    var user_id = $chatMsgs.data("user_id");
+    var $scrollEl = dcGetScrollEl();
+    var oldHeight = $scrollEl.length ? $scrollEl[0].scrollHeight : 0;
+    var oldTop = $scrollEl.length ? $scrollEl.scrollTop() : 0;
+    var $sentinel = $chatMsgs.find(".dc-history-sentinel").first();
+
+    dcHistoryLoading = true;
+    $sentinel.text("Загрузка старых сообщений...");
+
+    $.ajax({
+      url: ajaxurl,
+      type: "POST",
+      dataType: "json",
+      data: {
+        action: "dc_load_older_messages",
+        user_id: user_id,
+        id: modelId,
+        offset: offset,
+      },
+      success: function (response) {
+        if (!response.success || !response.data) return;
+
+        $chatMsgs = $("#chatModalContent .chat-messages[data-source='dating_com']");
+        $sentinel = $chatMsgs.find(".dc-history-sentinel").first();
+
+        if (response.data.html) {
+          if ($sentinel.length) {
+            $sentinel.after(response.data.html);
+          } else {
+            $chatMsgs.prepend(response.data.html);
+          }
+        }
+
+        $chatMsgs.attr("data-history_offset", response.data.next_offset || offset);
+        $chatMsgs.attr("data-history_total", response.data.total || 0);
+        $chatMsgs.attr("data-has_more", response.data.has_more ? "1" : "0");
+
+        if (response.data.has_more) {
+          if (!$sentinel.length) {
+            $sentinel = $('<div class="dc-history-sentinel text-center text-muted"></div>');
+            $chatMsgs.prepend($sentinel);
+          }
+          $sentinel.text("Прокрутите вверх — старые сообщения подгрузятся автоматически");
+        } else {
+          $sentinel.remove();
+        }
+
+        if ($scrollEl.length) {
+          var newHeight = $scrollEl[0].scrollHeight;
+          $scrollEl.scrollTop(oldTop + (newHeight - oldHeight));
+        }
+      },
+      complete: function () {
+        dcHistoryLoading = false;
+      },
+    });
+  }
+
+  function bindDCHistoryScroll(scrollToBottom) {
+    var $scrollEl = dcGetScrollEl();
+    if (!$scrollEl.length) return;
+
+    $scrollEl.off("scroll.dcHistory").on("scroll.dcHistory", function () {
+      var $chatMsgs = $("#chatModalContent .chat-messages[data-source='dating_com']");
+      if (!$chatMsgs.length) return;
+      if ($(this).scrollTop() <= 80) {
+        loadDCOlderMessages();
+      }
+    });
+
+    if (scrollToBottom) {
+      setTimeout(dcScrollToBottom, 0);
+    }
+  }
 
   function checkDCMessages() {
     var $chatMsgs = $("#chatModalContent .chat-messages");
     if (!$chatMsgs.length || $chatMsgs.data("source") !== "dating_com") return;
 
-    var user_id = $chatMsgs.data("user_id");
-
-    // Remember scroll position before replace
-    var $scrollEl = $("#chatModal .modal-body");
-    var wasNearBottom = false;
+    var $scrollEl = dcGetScrollEl();
+    var wasNearBottom = true;
     if ($scrollEl.length) {
       var sh = $scrollEl[0].scrollHeight;
       var st = $scrollEl.scrollTop();
@@ -52,8 +142,11 @@ $(function () {
       wasNearBottom = sh - st - ch < 80;
     }
 
-    // Count inbound messages before update
-    var prevInbound = $("#chatModalContent .chat-message.text-start").length;
+    // Do not replace an expanded history view while the operator is reading it.
+    if (!wasNearBottom || dcHistoryLoading) return;
+
+    var user_id = $chatMsgs.data("user_id");
+    var prevLastId = String($chatMsgs.find(".chat-message").last().attr("data-message_id") || "");
 
     $.ajax({
       url: ajaxurl,
@@ -64,18 +157,19 @@ $(function () {
         if (!response.success) return;
 
         var $parsed = $(response.data);
-        var newInbound = $parsed.find(".chat-message.text-start").length;
-        if ($parsed.is(".chat-message.text-start")) newInbound++;
+        var $newLast = $parsed.find(".chat-message").last();
+        var newLastId = String($newLast.attr("data-message_id") || "");
+        var newDirection = String($newLast.attr("data-direction") || "");
 
         $("#chatModalContent .messages").html(response.data);
 
-        if (newInbound > prevInbound && window.crmNotifySound) {
+        if (newLastId && prevLastId && newLastId !== prevLastId &&
+            newDirection === "inbound" && window.crmNotifySound) {
           window.crmNotifySound.play().catch(function () {});
         }
 
-        if (wasNearBottom && $scrollEl.length) {
-          $scrollEl.scrollTop($scrollEl[0].scrollHeight);
-        }
+        bindDCHistoryScroll(false);
+        dcScrollToBottom();
       },
     });
   }
@@ -91,6 +185,12 @@ $(function () {
       dcChatInterval = null;
     }
   }
+
+  $("#chatModal").on("hidden.bs.modal", function () {
+    stopDCChatPolling();
+    dcHistoryLoading = false;
+    dcGetScrollEl().off("scroll.dcHistory");
+  });
 
   window.checkOnlineModel = function (modelId) {
     $.ajax({
@@ -325,6 +425,7 @@ $(function () {
           $("#chatModalContent").html(response.data);
           // Start 5 s DC polling if this is a Dating.com chat
           if ($("#chatModalContent .chat-messages[data-source='dating_com']").length) {
+            bindDCHistoryScroll(true);
             startDCChatPolling();
           }
         } else {
@@ -733,3 +834,5 @@ $(function () {
     });
   }
 });
+
+[executed on device: vladkuzmenko-prod-01 (a98d5c98-0c1c-4835-8cbe-8f57c784dc88)]
