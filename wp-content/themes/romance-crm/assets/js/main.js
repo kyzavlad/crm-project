@@ -38,7 +38,7 @@ $(function () {
   var dcHistoryLoading = false;
 
   function dcGetScrollEl() {
-    return $("#chatModalContent .chat-messages[data-source=\'dating_com\']");
+    return $("#chatModalContent .chat-messages[data-source='dating_com']");
   }
 
   function dcScrollToBottom() {
@@ -139,7 +139,7 @@ $(function () {
       var sh = $scrollEl[0].scrollHeight;
       var st = $scrollEl.scrollTop();
       var ch = $scrollEl[0].clientHeight;
-      wasNearBottom = sh - st - ch < 80;
+      wasNearBottom = sh - st - ch < 24;
     }
 
     // Do not replace an expanded history view while the operator is reading it.
@@ -157,19 +157,36 @@ $(function () {
         if (!response.success) return;
 
         var $parsed = $(response.data);
-        var $newLast = $parsed.find(".chat-message").last();
+        var $newMessages = $parsed.find(".chat-message");
+        var $newLast = $newMessages.last();
         var newLastId = String($newLast.attr("data-message_id") || "");
         var newDirection = String($newLast.attr("data-direction") || "");
+        var currentCount = $("#chatModalContent .messages .chat-message").length;
+        var newCount = $newMessages.length;
+        var hasNewMessage = !!(newLastId && prevLastId && newLastId !== prevLastId);
+
+        // DC_CHAT_STABLE_POLL_V2
+        // Polling used to replace the whole chat every 5s even when nothing
+        // changed, which reset the browser scroll position and made the dialog
+        // visibly "jump". If the last message and visible page are unchanged,
+        // leave the DOM and scroll position untouched.
+        if (!hasNewMessage && newLastId === prevLastId && newCount === currentCount) {
+          return;
+        }
 
         $("#chatModalContent .messages").html(response.data);
 
-        if (newLastId && prevLastId && newLastId !== prevLastId &&
-            newDirection === "inbound" && window.crmNotifySound) {
+        if (hasNewMessage && newDirection === "inbound" && window.crmNotifySound) {
           window.crmNotifySound.play().catch(function () {});
         }
 
         bindDCHistoryScroll(false);
-        dcScrollToBottom();
+
+        // Only follow the bottom when a genuinely new message arrived and the
+        // operator was already at the bottom before the poll.
+        if (hasNewMessage && wasNearBottom) {
+          setTimeout(dcScrollToBottom, 0);
+        }
       },
     });
   }
@@ -834,5 +851,3 @@ $(function () {
     });
   }
 });
-
-[executed on device: vladkuzmenko-prod-01 (a98d5c98-0c1c-4835-8cbe-8f57c784dc88)]
