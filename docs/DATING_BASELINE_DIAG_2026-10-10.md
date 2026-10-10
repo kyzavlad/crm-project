@@ -37,3 +37,14 @@ Local authorized staging directory: `/home/vladops/jarvis-crmprod-stage/dating-2
 3. VPS owner via Jeki must bring current CPU steal recordings and request physical-host contention remediation. No request to purchase a new host/VPS, no unapproved restart/migration.
 4. Tatiana must prove a fresh natural outgoing by matching an authorized queue item to source ID+timestamp; there is no verified Oct10 Tatiana outbound. Do not replay `error` or HTTP202 uncertain rows.
 5. The current proof does NOT certify 24h stability or complete UI acceptance. Keep baseline OPEN.
+
+## Approved SHA preflight blocked before deploy — 2026-10-10
+
+The owner explicitly approved **only** `deploy-dating-ui-capture.sh` SHA-256 `a23864a95036e825f00d8f803ac59a9a32009b9eda602bc9b88be368ab57b124`. The approved script is unchanged. Preflight caught a coding error in its `BASE_SHA` constant: the value has **69 hex digits**, not 64, and does not match the actual original production mu-plugin SHA-256 `73f9bc19e0c16b99b0780d0ff3b157c415e00daa7c786e63e35d79c8a34f4ae1`. Consequently the SHA-bound guard failed before running the deployment. **No file replacement, no service restart, no message send, no rollback action needed.** Live Dating-time PHP remains SHA `64a1be806f87c406cba81e80866943c1d346d73d22e171074b6171094066e83f`, and live outbound mu-plugin remains its original SHA. No new `dc-ui-20261010*` backup directory appeared, confirming no deployment attempt reached the backup phase.
+
+A NEW staged script was prepared by correcting **only** the malformed baseline SHA constant:
+- Path: `/home/vladops/jarvis-crmprod-stage/dating-20261010/deploy-dating-ui-capture-v2.sh`
+- **NEW script SHA-256 `82df9547159faeb6dc474a85529940ba8b90e60849c16ec9eb7a5ec1ee58840a`**.
+- Target staged PHP content unchanged, SHA-256 `35eea392009213528f1f50df0452c0f9972df252bd12d3f247438f40d7590c9a`.
+- One-line diff against the formerly approved script: `BASE_SHA` only; shell syntax PASS; PHP lint PASS; behavioral mock for localized submit interception, single enqueue and no duplicate PASS. This mock made **zero network sends**.
+- **Deployment V2 NOT executed.** Explicit new owner approval bound to script SHA `82df9547159faeb6dc474a85529940ba8b90e60849c16ec9eb7a5ec1ee58840a` is required before any production mutation, even though functionality and scope remain identical.
